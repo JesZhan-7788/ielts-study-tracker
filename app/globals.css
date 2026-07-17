@@ -175,24 +175,6 @@ button {
   white-space: nowrap;
 }
 
-.reminder-control {
-  display: grid;
-  flex: 0 0 auto;
-  gap: 3px;
-  color: var(--muted);
-  font-size: 0.61rem;
-}
-
-.reminder-control select {
-  min-width: 62px;
-  padding: 4px 21px 4px 7px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  outline: none;
-  background: var(--paper);
-  font-size: 0.7rem;
-}
-
 .legend {
   display: flex;
   align-items: center;
@@ -271,37 +253,6 @@ button {
   margin-top: 3px;
   font-size: clamp(0.46rem, 1.6vw, 0.62rem);
   opacity: 0.68;
-}
-
-.alert-badge {
-  position: absolute;
-  z-index: 2;
-  top: -6px;
-  right: -5px;
-  display: grid;
-  width: 20px;
-  height: 20px;
-  place-content: center;
-  border: 2px solid var(--paper);
-  border-radius: 50%;
-  background: var(--orange);
-  color: white;
-  font-size: 0.68rem;
-  font-weight: 850;
-}
-
-.alert-badge small {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  display: grid;
-  min-width: 12px;
-  height: 12px;
-  padding: 0 2px;
-  place-content: center;
-  border-radius: 6px;
-  background: #9f6339;
-  font-size: 0.48rem;
 }
 
 .smiley {
@@ -502,6 +453,33 @@ button {
   flex: 1;
 }
 
+.edit-task {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-content: center;
+  margin: -3px -5px 0 0;
+  border-radius: 9px;
+  color: #8b8e84;
+}
+
+.edit-task:active,
+.edit-task.editing {
+  background: rgba(91, 140, 90, 0.12);
+  color: var(--deep-green);
+}
+
+.edit-task svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
 .task-text {
   display: block;
   width: 100%;
@@ -677,6 +655,23 @@ button {
 .loading-page p {
   margin: 13px 0 0;
   font-size: 0.76rem;
+}
+
+.storage-warning {
+  position: fixed;
+  z-index: 20;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  width: min(calc(100% - 28px), 460px);
+  padding: 10px 13px;
+  border: 1px solid rgba(216, 152, 96, 0.55);
+  border-radius: 11px;
+  background: #fff2e4;
+  color: #87552f;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  text-align: center;
+  transform: translateX(-50%);
 }
 
 @media (max-width: 520px) {

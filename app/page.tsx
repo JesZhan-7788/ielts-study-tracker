@@ -1,16 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { planData, type PlanDay, type PlanItem, type PlanPhase } from "./plan-data";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  normalizeCategory,
+  planData,
+  TASK_CATEGORIES,
+  type PlanDay,
+  type PlanItem,
+  type PlanPhase,
+  type TaskCategory,
+} from "./plan-data";
 
 type StoredDay = { items: PlanItem[] };
 type StorageApi = {
   get: (key: string, shared?: boolean) => Promise<unknown>;
-  set: (key: string, value: string, shared?: boolean) => Promise<unknown>;
 };
-
-const REMINDER_CATEGORIES = ["语法", "阅读", "听力", "精听", "写作", "口语", "Task 1 入门"];
-const REMINDER_OPTIONS = [3, 5, 7, 10];
 
 function storageKey(phaseId: string, dayIndex: number) {
   return `${phaseId}:day:${dayIndex}`;
@@ -22,26 +26,30 @@ function getStorageApi(): StorageApi | undefined {
 
 async function readStoredDay(key: string): Promise<StoredDay | null> {
   try {
+    const saved = window.localStorage.getItem(key);
+    if (saved) return JSON.parse(saved) as StoredDay;
+  } catch {
+    // Try the legacy storage API below, then migrate its value to localStorage.
+  }
+
+  try {
     const api = getStorageApi();
-    const result = api ? await api.get(key, false) : window.localStorage.getItem(key);
+    if (!api || typeof api.get !== "function") return null;
+    const result = await api.get(key, false);
     const value = typeof result === "object" && result !== null && "value" in result
       ? (result as { value: unknown }).value
       : result;
     if (!value) return null;
-    return typeof value === "string" ? JSON.parse(value) : (value as StoredDay);
+    const stored = typeof value === "string" ? JSON.parse(value) : (value as StoredDay);
+    window.localStorage.setItem(key, JSON.stringify(stored));
+    return stored;
   } catch {
     return null;
   }
 }
 
-async function writeStoredDay(key: string, value: StoredDay) {
-  const serialized = JSON.stringify(value);
-  const api = getStorageApi();
-  if (api) {
-    await api.set(key, serialized, false);
-  } else {
-    window.localStorage.setItem(key, serialized);
-  }
+function writeStoredDay(key: string, value: StoredDay) {
+  window.localStorage.setItem(key, JSON.stringify(value));
 }
 
 function mergeItems(planned: PlanItem[], stored?: StoredDay | null): PlanItem[] {
@@ -49,9 +57,11 @@ function mergeItems(planned: PlanItem[], stored?: StoredDay | null): PlanItem[] 
   const storedById = new Map(stored.items.map((item) => [item.id, item]));
   const originalItems = planned.map((item) => {
     const saved = storedById.get(item.id);
-    return saved ? { ...item, ...saved, isCustom: false } : { ...item };
+    return saved ? { ...item, ...saved, category: item.category, isCustom: false } : { ...item };
   });
-  const customItems = stored.items.filter((item) => item.isCustom);
+  const customItems = stored.items
+    .filter((item) => item.isCustom)
+    .map((item) => ({ ...item, category: normalizeCategory(String(item.category)) }));
   return [...originalItems, ...customItems];
 }
 
@@ -92,42 +102,36 @@ function Smiley() {
   return <span className="smiley" aria-hidden="true"><span /></span>;
 }
 
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 20h4l11-11-4-4L4 16v4Z" />
+      <path d="m13.8 6.2 4 4" />
+    </svg>
+  );
+}
+
+function ConfirmIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m5 12.5 4.2 4L19 7" />
+    </svg>
+  );
+}
+
 function Overview({
   phases,
   phase,
   itemsByDay,
-  reminderWindow,
-  onReminderWindowChange,
   onPhaseChange,
   onOpenDay,
 }: {
   phases: PlanPhase[];
   phase: PlanPhase;
   itemsByDay: Record<string, PlanItem[]>;
-  reminderWindow: number;
-  onReminderWindowChange: (value: number) => void;
   onPhaseChange: (phaseId: string) => void;
   onOpenDay: (dayIndex: number) => void;
 }) {
-  const reminders = useMemo(() => {
-    const result = new Map<number, string[]>();
-
-    phase.days.forEach((day, index) => {
-      if (index < reminderWindow - 1) return;
-      const windowDays = phase.days.slice(index - reminderWindow + 1, index + 1);
-      const overdue = REMINDER_CATEGORIES.filter((category) => {
-        const matching = windowDays.flatMap((windowDay) =>
-          (itemsByDay[storageKey(phase.phaseId, windowDay.dayIndex)] || windowDay.items)
-            .filter((item) => !item.isCustom && item.category === category),
-        );
-        return matching.length > 0 && matching.every((item) => !item.checked);
-      });
-      if (overdue.length) result.set(day.dayIndex, overdue);
-    });
-
-    return result;
-  }, [itemsByDay, phase, reminderWindow]);
-
   const totalItems = phase.days.reduce((sum, day) => {
     const items = itemsByDay[storageKey(phase.phaseId, day.dayIndex)] || day.items;
     return sum + plannedProgress(items).total;
@@ -166,12 +170,6 @@ function Overview({
             <strong>{phase.phaseName}</strong>
           </div>
         )}
-        <label className="reminder-control">
-          <span>连续提醒</span>
-          <select value={reminderWindow} onChange={(event) => onReminderWindowChange(Number(event.target.value))}>
-            {REMINDER_OPTIONS.map((option) => <option key={option} value={option}>{option} 天</option>)}
-          </select>
-        </label>
       </section>
 
       <div className="legend" aria-label="完成状态图例">
@@ -186,20 +184,14 @@ function Overview({
           const items = itemsByDay[storageKey(phase.phaseId, day.dayIndex)] || day.items;
           const status = dayStatus(items);
           const progress = plannedProgress(items);
-          const dayReminders = reminders.get(day.dayIndex) || [];
 
           return (
             <button
               className={`day-card ${status}`}
               key={day.dayIndex}
               onClick={() => onOpenDay(day.dayIndex)}
-              aria-label={`Day ${day.dayIndex}，已完成 ${progress.completed} 项，共 ${progress.total} 项${dayReminders.length ? `，提醒：${dayReminders.join("、")}` : ""}`}
+              aria-label={`Day ${day.dayIndex}，已完成 ${progress.completed} 项，共 ${progress.total} 项`}
             >
-              {dayReminders.length > 0 && (
-                <span className="alert-badge" title={`${dayReminders.join("、")}连续 ${reminderWindow} 天未打卡`}>
-                  !<small>{dayReminders.length}</small>
-                </span>
-              )}
               <span className="day-label">Day</span>
               <strong>{day.dayIndex}</strong>
               <span className="item-count">{progress.completed}/{progress.total}</span>
@@ -236,7 +228,7 @@ function Detail({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
-  const [newCategory, setNewCategory] = useState("其他");
+  const [newCategory, setNewCategory] = useState<TaskCategory>("基础");
   const [newText, setNewText] = useState("");
   const touchStartX = useRef<number | null>(null);
   const { completed, total } = plannedProgress(items);
@@ -245,6 +237,13 @@ function Detail({
 
   const updateItem = (id: string, patch: Partial<PlanItem>) => {
     onChange(items.map((item) => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const toggleItem = (item: PlanItem) => {
+    updateItem(item.id, {
+      checked: !item.checked,
+      checkedDate: item.checked ? null : todayIso(),
+    });
   };
 
   const beginEdit = (item: PlanItem) => {
@@ -268,7 +267,7 @@ function Detail({
       isCustom: true,
     }]);
     setNewText("");
-    setNewCategory("其他");
+    setNewCategory("基础");
     setAdding(false);
   };
 
@@ -317,10 +316,7 @@ function Detail({
           <article className={`task-row ${item.checked ? "checked" : ""}`} key={item.id}>
             <button
               className="drawn-checkbox"
-              onClick={() => updateItem(item.id, {
-                checked: !item.checked,
-                checkedDate: item.checked ? null : todayIso(),
-              })}
+              onClick={() => toggleItem(item)}
               aria-label={`${item.checked ? "取消完成" : "标记完成"}：${item.category} ${item.text}`}
               aria-pressed={item.checked}
             >
@@ -341,7 +337,7 @@ function Detail({
                   aria-label="编辑任务文字"
                 />
               ) : (
-                <button className="task-text" onClick={() => beginEdit(item)}>
+                <button className="task-text" onClick={() => toggleItem(item)}>
                   <span className="category">{item.category}：</span>{item.text}
                 </button>
               )}
@@ -350,6 +346,14 @@ function Detail({
                 {item.checkedDate && <span>{formatCheckedDate(item.checkedDate)}</span>}
               </div>
             </div>
+            <button
+              className={`edit-task ${editingId === item.id ? "editing" : ""}`}
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => editingId === item.id ? saveEdit() : beginEdit(item)}
+              aria-label={editingId === item.id ? "保存任务文字" : `编辑任务：${item.text}`}
+            >
+              {editingId === item.id ? <ConfirmIcon /> : <PencilIcon />}
+            </button>
           </article>
         ))}
       </section>
@@ -357,8 +361,8 @@ function Detail({
       <section className="add-section">
         {adding ? (
           <div className="add-form">
-            <select value={newCategory} onChange={(event) => setNewCategory(event.target.value)} aria-label="任务分类">
-              {[...REMINDER_CATEGORIES, "其他"].map((category) => <option key={category}>{category}</option>)}
+            <select value={newCategory} onChange={(event) => setNewCategory(event.target.value as TaskCategory)} aria-label="任务分类">
+              {TASK_CATEGORIES.map((category) => <option key={category}>{category}</option>)}
             </select>
             <input
               autoFocus
@@ -397,7 +401,7 @@ export default function Home() {
   const [activePhaseId, setActivePhaseId] = useState(planData.phases[0].phaseId);
   const [activeDayIndex, setActiveDayIndex] = useState<number | null>(null);
   const [itemsByDay, setItemsByDay] = useState<Record<string, PlanItem[]>>({});
-  const [reminderWindow, setReminderWindow] = useState(7);
+  const [storageError, setStorageError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const phase = planData.phases.find((candidate) => candidate.phaseId === activePhaseId) || planData.phases[0];
 
@@ -422,8 +426,11 @@ export default function Home() {
         }),
       ));
       setItemsByDay(Object.fromEntries(loadedEntries));
-      const savedWindow = Number(window.localStorage.getItem("ielts:reminder-window"));
-      if (REMINDER_OPTIONS.includes(savedWindow)) setReminderWindow(savedWindow);
+      try {
+        window.localStorage.removeItem("ielts:reminder-window");
+      } catch {
+        // A write attempt will show a visible warning if storage remains unavailable.
+      }
       setHydrated(true);
     };
     void load();
@@ -440,13 +447,14 @@ export default function Home() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [activePhaseId]);
 
-  const updateDay = async (day: PlanDay, items: PlanItem[]) => {
+  const updateDay = (day: PlanDay, items: PlanItem[]) => {
     const key = storageKey(phase.phaseId, day.dayIndex);
     setItemsByDay((current) => ({ ...current, [key]: items }));
     try {
-      await writeStoredDay(key, { items });
+      writeStoredDay(key, { items });
+      setStorageError(null);
     } catch {
-      // Keep the optimistic state; the next interaction can retry persistence.
+      setStorageError("本次修改未保存。请关闭无痕模式，并用 Safari 或主屏幕入口重新打开。");
     }
   };
 
@@ -456,7 +464,7 @@ export default function Home() {
     return <main className="loading-page"><span className="loading-mark">✓</span><p>正在翻开今天的计划…</p></main>;
   }
 
-  if (activeDay) {
+  const content = activeDay ? (() => {
     const key = storageKey(phase.phaseId, activeDay.dayIndex);
     return (
       <Detail
@@ -465,23 +473,23 @@ export default function Home() {
         items={itemsByDay[key] || activeDay.items}
         onBack={() => navigate(null)}
         onNavigate={(direction) => navigate(activeDay.dayIndex + direction)}
-        onChange={(items) => void updateDay(activeDay, items)}
+        onChange={(items) => updateDay(activeDay, items)}
       />
     );
-  }
-
-  return (
+  })() : (
     <Overview
       phases={planData.phases}
       phase={phase}
       itemsByDay={itemsByDay}
-      reminderWindow={reminderWindow}
-      onReminderWindowChange={(value) => {
-        setReminderWindow(value);
-        window.localStorage.setItem("ielts:reminder-window", String(value));
-      }}
       onPhaseChange={(phaseId) => navigate(null, phaseId)}
       onOpenDay={(dayIndex) => navigate(dayIndex)}
     />
+  );
+
+  return (
+    <>
+      {storageError && <div className="storage-warning" role="alert">{storageError}</div>}
+      {content}
+    </>
   );
 }

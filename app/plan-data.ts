@@ -1,6 +1,10 @@
+export const TASK_CATEGORIES = ["基础", "阅读", "听力", "写作", "口语"] as const;
+
+export type TaskCategory = (typeof TASK_CATEGORIES)[number];
+
 export type PlanItem = {
   id: string;
-  category: string;
+  category: TaskCategory;
   text: string;
   checked: boolean;
   checkedDate: string | null;
@@ -30,6 +34,28 @@ type DaySource = {
   content: string;
   materials: string;
 };
+
+const CATEGORY_MAP: Record<string, TaskCategory> = {
+  基础: "基础",
+  语法: "基础",
+  周复盘: "基础",
+  月度复盘: "基础",
+  其他: "基础",
+  阅读: "阅读",
+  听力: "听力",
+  精听: "听力",
+  王陆语料库: "听力",
+  写作: "写作",
+  "Task 1 入门": "写作",
+  口语: "口语",
+};
+
+export function normalizeCategory(category: string, fallback: TaskCategory = "基础"): TaskCategory {
+  const normalized = category.trim();
+  if (CATEGORY_MAP[normalized]) return CATEGORY_MAP[normalized];
+  if (/Task\s*1/i.test(normalized)) return "写作";
+  return fallback;
+}
 
 const daySources: DaySource[] = [
   { date: "2026-07-08", weekday: "周三", week: 1, content: "语法: 冠词专项；阅读: 《雅思主题阅读法》剩余部分；精听: 重听剑桥17 Test 1 听力错题", materials: "顾家北写作语法知识；雅思主题阅读法；剑17 Test 1" },
@@ -63,10 +89,15 @@ const daySources: DaySource[] = [
 ];
 
 function parseItems(content: string, dayIndex: number): PlanItem[] {
+  let previousCategory: TaskCategory = "基础";
+
   return content.split("；").map((part, itemIndex) => {
     const separator = part.indexOf(":");
-    const category = separator > -1 ? part.slice(0, separator).trim() : "其他";
     const text = separator > -1 ? part.slice(separator + 1).trim() : part.trim();
+    const category = separator > -1
+      ? normalizeCategory(part.slice(0, separator), previousCategory)
+      : text.includes("Daily Log") ? "基础" : previousCategory;
+    previousCategory = category;
 
     return {
       id: `p1d${dayIndex}i${itemIndex + 1}`,
