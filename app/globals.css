@@ -610,6 +610,11 @@ button {
   line-height: 1.65;
 }
 
+.duration-note .materials-icon {
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
 .day-navigation {
   display: grid;
   grid-template-columns: 1fr auto 1fr;

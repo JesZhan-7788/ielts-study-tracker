@@ -52,14 +52,39 @@ function writeStoredDay(key: string, value: StoredDay) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
-function mergeItems(planned: PlanItem[], stored?: StoredDay | null): PlanItem[] {
-  if (!stored) return planned.map((item) => ({ ...item }));
-  const storedById = new Map(stored.items.map((item) => [item.id, item]));
+function itemSignature(item: PlanItem) {
+  return `${normalizeCategory(String(item.category))}\u0000${item.text.trim()}`;
+}
+
+function mergeItems(
+  planned: PlanItem[],
+  stored?: StoredDay | null,
+  preserveStoredById = false,
+  matchingPool: PlanItem[] = stored?.items.filter((item) => !item.isCustom) ?? [],
+  usedStoredIds: Set<string> = new Set(),
+): PlanItem[] {
+  if (!stored && matchingPool.length === 0) return planned.map((item) => ({ ...item }));
+  const storedItems = stored?.items ?? [];
+  const storedOriginal = storedItems.filter((item) => !item.isCustom);
+  const storedById = new Map(storedOriginal.map((item) => [item.id, item]));
   const originalItems = planned.map((item) => {
-    const saved = storedById.get(item.id);
-    return saved ? { ...item, ...saved, category: item.category, isCustom: false } : { ...item };
+    const savedById = storedById.get(item.id);
+    const saved = preserveStoredById
+      ? savedById
+      : matchingPool.find((candidate) =>
+        candidate.id === item.id &&
+        !usedStoredIds.has(candidate.id) &&
+        itemSignature(candidate) === itemSignature(item),
+      ) ?? matchingPool.find((candidate) =>
+        !usedStoredIds.has(candidate.id) && itemSignature(candidate) === itemSignature(item),
+      );
+    if (!saved) return { ...item };
+    usedStoredIds.add(saved.id);
+    return preserveStoredById
+      ? { ...item, ...saved, category: item.category, isCustom: false }
+      : { ...item, checked: saved.checked, checkedDate: saved.checkedDate };
   });
-  const customItems = stored.items
+  const customItems = storedItems
     .filter((item) => item.isCustom)
     .map((item) => ({ ...item, category: normalizeCategory(String(item.category)) }));
   return [...originalItems, ...customItems];
@@ -303,7 +328,7 @@ function Detail({
       </header>
 
       <section className="day-heading">
-        <p>{day.calendarDate} · {day.weekday}</p>
+        <p>{day.calendarDate && day.weekday ? `${day.calendarDate} · ${day.weekday}` : "按实际学习节奏推进"}</p>
         <h1><span>Day</span> {day.dayIndex}</h1>
         <div className="detail-progress">
           <div className="progress-track"><span style={{ width: `${total ? (completed / total) * 100 : 0}%` }} /></div>
@@ -383,10 +408,19 @@ function Detail({
         )}
       </section>
 
-      <aside className="materials-note">
-        <span className="materials-icon" aria-hidden="true">▥</span>
-        <div><strong>参考教材</strong><p>{day.materialsNote}</p></div>
-      </aside>
+      {day.materialsNote && (
+        <aside className="materials-note">
+          <span className="materials-icon" aria-hidden="true">▥</span>
+          <div><strong>参考教材</strong><p>{day.materialsNote}</p></div>
+        </aside>
+      )}
+
+      {day.durationNote && (
+        <aside className="materials-note duration-note">
+          <span className="materials-icon" aria-hidden="true">时</span>
+          <div><strong>预计时长</strong><p>{day.durationNote}</p></div>
+        </aside>
+      )}
 
       <nav className="day-navigation" aria-label="切换日期">
         <button disabled={isFirst} onClick={() => onNavigate(-1)}>← 前一天</button>
@@ -418,13 +452,33 @@ export default function Home() {
 
   useEffect(() => {
     const load = async () => {
-      const loadedEntries = await Promise.all(planData.phases.flatMap((candidate) =>
+      const savedEntries = await Promise.all(planData.phases.flatMap((candidate) =>
         candidate.days.map(async (day) => {
           const key = storageKey(candidate.phaseId, day.dayIndex);
           const saved = await readStoredDay(key);
-          return [key, mergeItems(day.items, saved)] as const;
+          return [key, saved] as const;
         }),
       ));
+      const savedByDay = Object.fromEntries(savedEntries) as Record<string, StoredDay | null>;
+      const loadedEntries = planData.phases.flatMap((candidate) => {
+        const matchingPool = candidate.days
+          .filter((day) => day.dayIndex > 5)
+          .flatMap((day) =>
+            (savedByDay[storageKey(candidate.phaseId, day.dayIndex)]?.items ?? [])
+              .filter((item) => !item.isCustom),
+          );
+        const usedStoredIds = new Set<string>();
+        return candidate.days.map((day) => {
+          const key = storageKey(candidate.phaseId, day.dayIndex);
+          return [key, mergeItems(
+            day.items,
+            savedByDay[key],
+            day.dayIndex <= 5,
+            matchingPool,
+            usedStoredIds,
+          )] as const;
+        });
+      });
       setItemsByDay(Object.fromEntries(loadedEntries));
       try {
         window.localStorage.removeItem("ielts:reminder-window");
