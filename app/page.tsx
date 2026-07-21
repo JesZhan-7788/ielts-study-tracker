@@ -10,6 +10,8 @@ import {
   type PlanPhase,
   type TaskCategory,
 } from "./plan-data";
+import { vocabCategories } from "./vocab-data";
+import { VocabIcon, VocabOverview, VocabReview, type VocabMastery } from "./vocab";
 
 type StoredDay = { items: PlanItem[] };
 type StorageApi = {
@@ -24,10 +26,10 @@ function getStorageApi(): StorageApi | undefined {
   return (window as Window & { storage?: StorageApi }).storage;
 }
 
-async function readStoredDay(key: string): Promise<StoredDay | null> {
+async function readStoredValue<T>(key: string): Promise<T | null> {
   try {
     const saved = window.localStorage.getItem(key);
-    if (saved) return JSON.parse(saved) as StoredDay;
+    if (saved) return JSON.parse(saved) as T;
   } catch {
     // Try the legacy storage API below, then migrate its value to localStorage.
   }
@@ -40,7 +42,7 @@ async function readStoredDay(key: string): Promise<StoredDay | null> {
       ? (result as { value: unknown }).value
       : result;
     if (!value) return null;
-    const stored = typeof value === "string" ? JSON.parse(value) : (value as StoredDay);
+    const stored = typeof value === "string" ? JSON.parse(value) : (value as T);
     window.localStorage.setItem(key, JSON.stringify(stored));
     return stored;
   } catch {
@@ -48,7 +50,7 @@ async function readStoredDay(key: string): Promise<StoredDay | null> {
   }
 }
 
-function writeStoredDay(key: string, value: StoredDay) {
+function writeStoredValue<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
@@ -120,7 +122,13 @@ function currentLocation() {
   const params = new URLSearchParams(window.location.search);
   const phaseId = params.get("phase") || planData.phases[0].phaseId;
   const day = Number(params.get("day"));
-  return { phaseId, dayIndex: Number.isFinite(day) && day > 0 ? day : null };
+  const view = params.get("view") === "vocab" ? "vocab" : "plan";
+  return {
+    view,
+    phaseId,
+    dayIndex: Number.isFinite(day) && day > 0 ? day : null,
+    vocabCategoryId: view === "vocab" ? params.get("category") : null,
+  } as const;
 }
 
 function Smiley() {
@@ -150,12 +158,14 @@ function Overview({
   itemsByDay,
   onPhaseChange,
   onOpenDay,
+  onOpenVocab,
 }: {
   phases: PlanPhase[];
   phase: PlanPhase;
   itemsByDay: Record<string, PlanItem[]>;
   onPhaseChange: (phaseId: string) => void;
   onOpenDay: (dayIndex: number) => void;
+  onOpenVocab: () => void;
 }) {
   const totalItems = phase.days.reduce((sum, day) => {
     const items = itemsByDay[storageKey(phase.phaseId, day.dayIndex)] || day.items;
@@ -224,6 +234,10 @@ function Overview({
             </button>
           );
         })}
+        <button className="vocab-entry" onClick={onOpenVocab} aria-label="打开词伙速记">
+          <VocabIcon />
+          <strong>词伙</strong>
+        </button>
       </section>
 
       <footer className="overview-footer">
@@ -432,9 +446,12 @@ function Detail({
 }
 
 export default function Home() {
+  const [activeView, setActiveView] = useState<"plan" | "vocab">("plan");
   const [activePhaseId, setActivePhaseId] = useState(planData.phases[0].phaseId);
   const [activeDayIndex, setActiveDayIndex] = useState<number | null>(null);
+  const [activeVocabCategoryId, setActiveVocabCategoryId] = useState<string | null>(null);
   const [itemsByDay, setItemsByDay] = useState<Record<string, PlanItem[]>>({});
+  const [vocabMasteryByCategory, setVocabMasteryByCategory] = useState<Record<string, VocabMastery>>({});
   const [storageError, setStorageError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const phase = planData.phases.find((candidate) => candidate.phaseId === activePhaseId) || planData.phases[0];
@@ -442,8 +459,10 @@ export default function Home() {
   useEffect(() => {
     const syncLocation = () => {
       const location = currentLocation();
+      setActiveView(location.view);
       setActivePhaseId(planData.phases.some((candidate) => candidate.phaseId === location.phaseId) ? location.phaseId : planData.phases[0].phaseId);
       setActiveDayIndex(location.dayIndex);
+      setActiveVocabCategoryId(location.vocabCategoryId);
     };
     syncLocation();
     window.addEventListener("popstate", syncLocation);
@@ -455,7 +474,7 @@ export default function Home() {
       const savedEntries = await Promise.all(planData.phases.flatMap((candidate) =>
         candidate.days.map(async (day) => {
           const key = storageKey(candidate.phaseId, day.dayIndex);
-          const saved = await readStoredDay(key);
+          const saved = await readStoredValue<StoredDay>(key);
           return [key, saved] as const;
         }),
       ));
@@ -480,6 +499,11 @@ export default function Home() {
         });
       });
       setItemsByDay(Object.fromEntries(loadedEntries));
+      const masteryEntries = await Promise.all(vocabCategories.map(async (category) => {
+        const saved = await readStoredValue<VocabMastery>(`vocab:${category.categoryId}`);
+        return [category.categoryId, saved ?? {}] as const;
+      }));
+      setVocabMasteryByCategory(Object.fromEntries(masteryEntries));
       try {
         window.localStorage.removeItem("ielts:reminder-window");
       } catch {
@@ -496,16 +520,42 @@ export default function Home() {
     if (dayIndex !== null) params.set("day", String(dayIndex));
     const query = params.toString();
     window.history.pushState({}, "", query ? `?${query}` : window.location.pathname);
+    setActiveView("plan");
     setActivePhaseId(phaseId);
     setActiveDayIndex(dayIndex);
+    setActiveVocabCategoryId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [activePhaseId]);
+
+  const navigateVocab = useCallback((categoryId: string | null) => {
+    const params = new URLSearchParams({ view: "vocab" });
+    if (categoryId) params.set("category", categoryId);
+    window.history.pushState({}, "", `?${params.toString()}`);
+    setActiveView("vocab");
+    setActiveDayIndex(null);
+    setActiveVocabCategoryId(categoryId);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
 
   const updateDay = (day: PlanDay, items: PlanItem[]) => {
     const key = storageKey(phase.phaseId, day.dayIndex);
     setItemsByDay((current) => ({ ...current, [key]: items }));
     try {
-      writeStoredDay(key, { items });
+      writeStoredValue(key, { items });
+      setStorageError(null);
+    } catch {
+      setStorageError("本次修改未保存。请关闭无痕模式，并用 Safari 或主屏幕入口重新打开。");
+    }
+  };
+
+  const updateVocabMastery = (categoryId: string, phraseId: string, mastered: boolean) => {
+    const nextCategoryState = {
+      ...(vocabMasteryByCategory[categoryId] ?? {}),
+      [phraseId]: mastered,
+    };
+    setVocabMasteryByCategory((current) => ({ ...current, [categoryId]: nextCategoryState }));
+    try {
+      writeStoredValue(`vocab:${categoryId}`, nextCategoryState);
       setStorageError(null);
     } catch {
       setStorageError("本次修改未保存。请关闭无痕模式，并用 Safari 或主屏幕入口重新打开。");
@@ -513,12 +563,32 @@ export default function Home() {
   };
 
   const activeDay = activeDayIndex === null ? null : phase.days.find((day) => day.dayIndex === activeDayIndex) || null;
+  const activeVocabCategory = activeVocabCategoryId === null
+    ? null
+    : vocabCategories.find((category) => category.categoryId === activeVocabCategoryId) ?? null;
 
   if (!hydrated) {
     return <main className="loading-page"><span className="loading-mark">✓</span><p>正在翻开今天的计划…</p></main>;
   }
 
-  const content = activeDay ? (() => {
+  const content = activeView === "vocab" ? (
+    activeVocabCategory ? (
+      <VocabReview
+        key={activeVocabCategory.categoryId}
+        category={activeVocabCategory}
+        mastery={vocabMasteryByCategory[activeVocabCategory.categoryId] ?? {}}
+        onBack={() => navigateVocab(null)}
+        onMasteryChange={(phraseId, mastered) => updateVocabMastery(activeVocabCategory.categoryId, phraseId, mastered)}
+      />
+    ) : (
+      <VocabOverview
+        categories={vocabCategories}
+        masteryByCategory={vocabMasteryByCategory}
+        onBack={() => navigate(null)}
+        onOpenCategory={(categoryId) => navigateVocab(categoryId)}
+      />
+    )
+  ) : activeDay ? (() => {
     const key = storageKey(phase.phaseId, activeDay.dayIndex);
     return (
       <Detail
@@ -537,6 +607,7 @@ export default function Home() {
       itemsByDay={itemsByDay}
       onPhaseChange={(phaseId) => navigate(null, phaseId)}
       onOpenDay={(dayIndex) => navigate(dayIndex)}
+      onOpenVocab={() => navigateVocab(null)}
     />
   );
 
